@@ -4,13 +4,16 @@ import {Game,freshState,ACHIEVEMENTS} from './engine.mjs';
 import {SaveManager,encryptState,decryptSave,SAVE_KEYS} from './save.mjs';
 import {icon} from './icons.mjs';
 import {BlackHoleScene} from './scene.mjs';
+import {ProductionClock,validTimestamp,MIN_TIMESTAMP} from './clock.mjs';
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 const views=[['buildings','Buildings','施設'],['upgrades','Upgrades','強化'],['skills','Skills','Skill'],['achievements','Achievements','実績'],['prestige','Prestige','再生'],['stats','Stats','記録'],['settings','Settings','設定']];
-let pressTimer,shopSignature='',game=new Game(),view='buildings',currency='dm',amount=1,filter='all',lastUI=0,saveElapsed=0,hiddenAt=null,resetting=false,dirty=true;
+const newUniverse=()=>{const now=Date.now();return freshState(validTimestamp(now)?now:MIN_TIMESTAMP);};
+let pressTimer,shopSignature='',game=new Game(newUniverse()),view='buildings',currency='dm',amount=1,filter='all',lastUI=0,resetting=false,loading=true,dirty=true;
+let clock=new ProductionClock(game,game.state.savedAt),lastSaveRequestedAt=clock.updatedAt;
 const saves=new SaveManager();const scene=new BlackHoleScene($('#blackhole-canvas'));const reducedQuery=matchMedia('(prefers-reduced-motion: reduce)');
 const fmt=n=>format(n,game.state.settings.notation);
 const safe=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function duration(sec,compact=false){sec=Math.floor(Math.max(0,sec));const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;if(compact)return h?`${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;return h?`${h}時間${m}分`:`${m}分${s}秒`;}
+function duration(sec,compact=false){sec=Math.floor(Math.max(0,sec));const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s=sec%60;if(compact)return h?`${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;return h?`${h}時間${m}分${s}秒`:`${m}分${s}秒`;}
 function fillIcons(root=document){root.querySelectorAll('[data-icon]').forEach(el=>el.innerHTML=icon(el.dataset.icon));}
 fillIcons();
 $('#navigation').innerHTML=views.map(([id,title,mobile])=>`<button class="nav-button ${id===view?'active':''}" data-view="${id}" aria-label="${title}" aria-current="${id===view?'page':'false'}">${icon(id,18)}<span class="desktop-label">${title}</span><span class="mobile-label">${mobile}</span><i class="nav-badge" id="badge-${id}" hidden></i></button>`).join('');
@@ -29,7 +32,7 @@ function attachEvents(){game.onEvent(event=>{
  if(event.type==='riftReward'){toast(event.effect.name,event.gain?`+${fmt(event.gain)} Dark Matter`:event.effect.label,'info','rift');log(`${event.effect.name}：${event.gain?`+${fmt(event.gain)} DM`:event.effect.label}`);}
  if(event.type==='prestige'){log(`宇宙を再生。+${fmt(event.reward)} Red Matterを獲得。`);toast('A NEW UNIVERSE',`+${fmt(event.reward)} Red Matter。永続施設は残ります。`,'info','prestige');}
  });}
-function setGame(state){game=new Game(state);game.hydrateEffects();attachEvents();applySettings();dirty=true;}
+function setGame(state){game=new Game(state);game.hydrateEffects();clock=new ProductionClock(game,state.savedAt);lastSaveRequestedAt=clock.updatedAt;attachEvents();applySettings();dirty=true;}
 attachEvents();
 function applySettings(){document.body.classList.toggle('reduced-motion',!game.state.settings.motion||reducedQuery.matches);dirty=true;}
 reducedQuery.addEventListener('change',applySettings);
@@ -81,19 +84,22 @@ function updateUI(){const s=game.state;$('#dm-value').textContent=fmt(s.dm);$('#
  dirty=false;
 }
 function updateAffordability() {$$('[data-upgrade]').forEach(el=>{const u=UPGRADES.find(x=>x.id===el.dataset.upgrade);el.disabled=!game.upgradeAvailable(u)||!game.state.dm.gte(u.cost);});$$('[data-skill]').forEach(el=>{const k=SKILLS.find(x=>x.id===el.dataset.skill);el.disabled=!game.skillAvailable(k)||game.infinity<k.cost;});const p=$('#prestige-button');if(p){p.disabled=!game.canPrestige();$('#prestige-reward-live').textContent=fmt(game.prestigeReward());$('#prestige-status-live').textContent=game.state.runDM.gte(CONFIG.prestige.threshold)?`現在周回 ${fmt(game.state.runDM)} DM · ${duration(game.state.runTime)}${game.state.runTime<180?' · 最低3分で再生可能':''}`:`現在周回 ${fmt(game.state.runDM)} / 1 M DM`;}}
-function doClick(){if($('#game-dialog').open||resetting)return;game.click();updateUI();}
-$('#blackhole').addEventListener('click',doClick);$('#rift-button').addEventListener('click',()=>{game.catchRift();updateUI();});
+function reportOffline(result){if(!result||result.seconds<CONFIG.offline.minimumSeconds)return;if($('#game-dialog').open)toast('オフライン生産',`${duration(result.seconds)} · +${fmt(result.dm)} DM · +${fmt(result.rm)} RM`,'info','save');else showOffline(result);}
+function syncProduction(){if(loading||resetting)return;reportOffline(clock.advance(Date.now()));}
+function doClick(){if($('#game-dialog').open||resetting||loading)return;syncProduction();if($('#game-dialog').open)return;game.click();updateUI();}
+$('#blackhole').addEventListener('click',doClick);$('#rift-button').addEventListener('click',()=>{if(resetting||loading)return;syncProduction();game.catchRift();updateUI();});
 window.addEventListener('keydown',e=>{if(e.code!=='Space'||e.altKey||e.ctrlKey||e.metaKey||$('#game-dialog').open||view==='settings')return;const el=e.target;if(el.closest('input,textarea,select,button,a,[contenteditable="true"]'))return;e.preventDefault();if(e.repeat)return;doClick();});
-async function save(manual=false){if(resetting)return;try{const result=await saves.save(game.state);if(result){$('#save-status').textContent='保存済み';if(manual)toast('セーブしました','この宇宙を安全に記録。','info','save');}}catch(e){$('#save-status').textContent='保存できません';if(manual)toast('セーブできません',e.message,'error','info');}}
+async function save(manual=false){if(resetting||loading)return;syncProduction();lastSaveRequestedAt=clock.updatedAt;try{const result=await saves.save(game.state,clock.updatedAt);if(result){$('#save-status').textContent='保存済み';if(manual)toast('セーブしました','この宇宙を安全に記録。','info','save');}}catch(e){$('#save-status').textContent='保存できません';if(manual)toast('セーブできません',e.message,'error','info');}}
 $('#manual-save').addEventListener('click',()=>save(true));
 function confirmPrestige(){dialog('新しい宇宙へ',`<p>今Prestigeすると <b style="color:var(--red)">${fmt(game.prestigeReward())} Red Matter</b> を獲得します。</p><p>Dark Matter・通常施設・通常Upgradeはリセット。永続施設、Infinity Skill、実績は引き継がれます。</p>`,`<button class="secondary-button" data-dialog-action="cancel">続けて観測</button><button class="primary-button" data-dialog-action="prestige">宇宙を再生する</button>`,'COSMIC REBIRTH');}
 function help(){dialog('宇宙観測の手引き',`<p><b>1. 採取する</b><br>ブラックホールをクリック・タップ。PCではSpaceも使用できます。長押しによる連打はありません。</p><p><b>2. 自動化する</b><br>15 DMでMatter Collectorを建設。施設10基で生産 ×2の研究が解放されます。Cosmic Riftを見つけたら捕捉しましょう。</p><p><b>3. 宇宙を再生する</b><br>この周回で1 M DMを生産するとPrestige。獲得したRed Matterで永続施設を建てると、次の周回から速く成長できます。</p><p><b>4. 無限へ</b><br>Lifetime 100 K DMからInfinity Matterを獲得。恒久Skillを育て、Red ResonanceでRed Matter生産を自動化しましょう。</p><p>最初のPrestigeの目安は積極的な操作で20〜45分。自動生産・オフライン生産でも、あなたのペースで進められます。</p>`,`<button class="primary-button" data-dialog-action="cancel">観測を始める</button>`,'FIELD MANUAL');}
 $('#help-button').addEventListener('click',help);
-async function exportSave(){try{const envelope=await encryptState(game.state),blob=new Blob([JSON.stringify(envelope,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),filename=`cosmic-rift-${new Date().toISOString().slice(0,10)}.json`;dialog('セーブを書き出す','<p>暗号化したJSONファイルをダウンロードします。別の端末では、設定のImportから読み込んでください。</p>',`<a class="primary-button" href="${url}" download="${filename}">${icon('download',17)}JSONファイルをダウンロード</a><button class="secondary-button" data-dialog-action="cancel">閉じる</button>`,'EXPORT SAVE');$('#game-dialog').addEventListener('close',()=>URL.revokeObjectURL(url),{once:true});}catch(e){toast('Exportできません',e.message,'error','info');}}
+async function exportSave(){try{syncProduction();const envelope=await encryptState(game.state,clock.updatedAt),blob=new Blob([JSON.stringify(envelope,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),filename=`cosmic-rift-${new Date().toISOString().slice(0,10)}.json`;dialog('セーブを書き出す','<p>暗号化したJSONファイルをダウンロードします。別の端末では、設定のImportから読み込んでください。</p>',`<a class="primary-button" href="${url}" download="${filename}">${icon('download',17)}JSONファイルをダウンロード</a><button class="secondary-button" data-dialog-action="cancel">閉じる</button>`,'EXPORT SAVE');$('#game-dialog').addEventListener('close',()=>URL.revokeObjectURL(url),{once:true});}catch(e){toast('Exportできません',e.message,'error','info');}}
 async function recoverBackup(){try{const state=await saves.backup();dialog('バックアップを復元',`<p>${safe(new Date(state.savedAt).toLocaleString('ja-JP'))} のセーブへ戻します。現在の進行は置き換えられます。</p>`,`<button class="secondary-button" data-dialog-action="cancel">キャンセル</button><button class="primary-button" data-dialog-action="restore">復元する</button>`);pendingState=state;}catch(e){toast('復元できません',e.message,'error','info');}}
 let pendingState=null;
 async function performAction(action){if(action==='observe'){navigate('buildings');window.scrollTo({top:0,behavior:'smooth'});}if(action==='save')await save(true);if(action==='export')await exportSave();if(action==='import')$('#import-file').click();if(action==='backup')await recoverBackup();if(action==='help')help();if(action==='reset')dialog('この宇宙を削除しますか？','<p>すべてのMatter、施設、Skill、実績とバックアップを削除します。必要なら先にExportしてください。</p>',`<button class="secondary-button" data-dialog-action="cancel">キャンセル</button><button class="danger-button" data-dialog-action="reset">すべて削除する</button>`,'FULL RESET');}
 document.addEventListener('click',async e=>{const el=e.target.closest('button');if(!el||el.disabled)return;
+ if(loading)return;syncProduction();
  if(el.dataset.view){navigate(el.dataset.view);return;}
  if(el.dataset.currency){currency=el.dataset.currency;renderShop();return;}
  if(el.dataset.amount){amount=el.dataset.amount==='max'?'max':Number(el.dataset.amount);renderShop();return;}
@@ -106,19 +112,31 @@ document.addEventListener('click',async e=>{const el=e.target.closest('button');
  if(el.dataset.action){await performAction(el.dataset.action);return;}
  const action=el.dataset.dialogAction;
  if(action==='cancel'){closeDialog();pendingState=null;}
- if(action==='prestige'){closeDialog();if(game.prestige()){if(game.state.settings.motion&&!reducedQuery.matches){$('#stage').classList.add('prestiging');setTimeout(()=>$('#stage').classList.remove('prestiging'),1100);}navigate('buildings');renderShop();updateUI();await save();}}
- if(action==='reset'){resetting=true;await saves.clear();setGame(freshState());resetting=false;closeDialog();navigate('buildings');renderShop();updateUI();saveElapsed=0;toast('新しい宇宙を開始','すべてのデータをリセットしました。','info','prestige');}
- if(action==='import'||action==='restore'){if(!pendingState)return;const state=pendingState;pendingState=null;resetting=true;try{const accepted=await saves.import(JSON.stringify(await encryptState(state)));setGame(accepted);const result=game.applyOffline(Math.max(0,(Date.now()-state.savedAt)/1000));closeDialog();navigate('buildings');renderShop();updateUI();toast(action==='restore'?'バックアップを復元しました':'Importしました','宇宙の記録を読み込みました。','info','save');if(result)showOffline(result);}catch(err){toast('読み込めません',err.message,'error','info');}finally{resetting=false;await save();}}
+ if(action==='prestige'){closeDialog();if(game.prestige(clock.updatedAt)){if(game.state.settings.motion&&!reducedQuery.matches){$('#stage').classList.add('prestiging');setTimeout(()=>$('#stage').classList.remove('prestiging'),1100);}navigate('buildings');renderShop();updateUI();await save();}}
+ if(action==='reset'){resetting=true;await saves.clear();setGame(newUniverse());resetting=false;closeDialog();navigate('buildings');renderShop();updateUI();await save();toast('新しい宇宙を開始','すべてのデータをリセットしました。','info','prestige');}
+ if(action==='import'||action==='restore'){if(!pendingState)return;const state=pendingState;pendingState=null;resetting=true;try{const accepted=await saves.import(JSON.stringify(await encryptState(state,state.savedAt)));setGame(accepted);const result=clock.advance(Date.now(),true);closeDialog();navigate('buildings');renderShop();updateUI();toast(action==='restore'?'バックアップを復元しました':'Importしました','宇宙の記録を読み込みました。','info','save');reportOffline(result);}catch(err){toast('読み込めません',err.message,'error','info');}finally{resetting=false;await save();}}
 });
 document.addEventListener('change',e=>{if(e.target.id==='notation-setting')game.state.settings.notation=e.target.value;if(e.target.id==='motion-setting')game.state.settings.motion=e.target.checked;if(e.target.id==='particles-setting')game.state.settings.particles=e.target.checked;applySettings();if(e.target.id.endsWith('-setting'))save();});
 $('#import-file').addEventListener('change',async e=>{const file=e.target.files[0];e.target.value='';if(!file)return;try{if(file.size>2000000)throw new Error('セーブファイルが大きすぎます。');pendingState=await decryptSave(await file.text());dialog('宇宙の記録を読み込む',`<p>Lifetime ${fmt(pendingState.lifetimeDM)} DM · Prestige ${pendingState.prestiges}回の記録を読み込みます。現在の進行は置き換えられます。</p>`,`<button class="secondary-button" data-dialog-action="cancel">キャンセル</button><button class="primary-button" data-dialog-action="import">Importする</button>`,'IMPORT SAVE');}catch(err){pendingState=null;toast('Importできません',err.message,'error','info');}});
 function showOffline(result){dialog('おかえりなさい',`<p>${duration(result.seconds)}、観測を離れていました。<br>その間も、あなたの宇宙は動き続けています。</p><div class="offline-award"><span>Dark Matter</span><b>+${fmt(result.dm)}</b></div><div class="offline-award red"><span>Red Matter</span><b>+${fmt(result.rm)}</b></div><p style="font-size:11px;margin-top:17px">生産効率 ${(result.efficiency*100).toFixed(0)}% · 計算対象 ${duration(result.credited)}（上限 ${game.offlineHours}時間）</p>`,`<button class="primary-button" data-dialog-action="cancel">観測を再開する</button>`,'OFFLINE PRODUCTION');}
-let previous=performance.now();
-function loop(now){if(!document.hidden&&!resetting){const dt=Math.max(0,(now-previous)/1000);if(dt>30){const result=game.applyOffline(dt);if(result)showOffline(result);}else game.tick(dt);saveElapsed+=Math.min(dt,30);if(saveElapsed>=CONFIG.autosaveSeconds){saveElapsed=0;save();}if(now-lastUI>=CONFIG.uiInterval){lastUI=now;dirty=true;updateUI();}if(view==='buildings')scene.render(now,false,!game.state.settings.motion||reducedQuery.matches);}previous=now;requestAnimationFrame(loop);}
-document.addEventListener('visibilitychange',()=>{if(document.hidden){hiddenAt=Date.now();save();}else if(hiddenAt){const elapsed=(Date.now()-hiddenAt)/1000;hiddenAt=null;const result=game.applyOffline(elapsed);if(!result)game.tick(elapsed);else showOffline(result);previous=performance.now();dirty=true;updateUI();save();}});
-window.addEventListener('pagehide',()=>{if(!resetting)save();});
-// The encrypted autosave and hide save are primary; pagehide async work is best-effort.
-try{const loaded=await saves.load();if(loaded.state){setGame(loaded.state);const result=game.applyOffline(Math.max(0,(Date.now()-loaded.state.savedAt)/1000));if(loaded.backup)toast('バックアップから復旧しました','前回の正常なセーブを読み込みました。','info','save');if(result)showOffline(result);$('#save-status').textContent='保存済み';}else if(loaded.corrupt){toast('セーブを読み込めません','データが破損しています。設定から正常なExportをImportできます。','error','info');resetting=true;dialog('記録を復元できません','<p>現在のセーブとバックアップを検証できませんでした。元のデータは上書きせず保持しています。正常なExportをImportするか、新しく始めてください。</p>',`<button class="secondary-button" data-dialog-action="corrupt-import">Import</button><button class="danger-button" data-dialog-action="corrupt-reset">新しく始める</button>`);$('#game-dialog').addEventListener('cancel',e=>e.preventDefault(),{once:true});}
+function loop(now){
+ if(!document.hidden&&!resetting&&!loading){
+  syncProduction();
+  if(clock.updatedAt-lastSaveRequestedAt>=CONFIG.autosaveSeconds*1000)save();
+  if(now-lastUI>=CONFIG.uiInterval){lastUI=now;dirty=true;updateUI();}
+  if(view==='buildings')scene.render(now,false,!game.state.settings.motion||reducedQuery.matches);
+ }
+ requestAnimationFrame(loop);
+}
+function pauseProduction(){if(loading||resetting)return;clock.pause(Date.now());save();}
+function resumeProduction(){if(loading||resetting||document.hidden)return;reportOffline(clock.resume(Date.now()));dirty=true;updateUI();save();}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)pauseProduction();else resumeProduction();});
+window.addEventListener('pagehide',pauseProduction);
+window.addEventListener('pageshow',event=>{if(event.persisted)resumeProduction();});
+// AES-GCM work at pagehide is best-effort; periodic and visibility saves provide checkpoints.
+try{const loaded=await saves.load();if(loaded.state){setGame(loaded.state);const result=clock.advance(Date.now(),true);if(loaded.backup)toast('バックアップから復旧しました','前回の正常なセーブを読み込みました。','info','save');reportOffline(result);$('#save-status').textContent='保存済み';}else if(loaded.corrupt){toast('セーブを読み込めません','データが破損しています。設定から正常なExportをImportできます。','error','info');resetting=true;dialog('記録を復元できません','<p>現在のセーブとバックアップを検証できませんでした。元のデータは上書きせず保持しています。正常なExportをImportするか、新しく始めてください。</p>',`<button class="secondary-button" data-dialog-action="corrupt-import">Import</button><button class="danger-button" data-dialog-action="corrupt-reset">新しく始める</button>`);$('#game-dialog').addEventListener('cancel',e=>e.preventDefault(),{once:true});}
 }catch(err){toast('セーブを利用できません','ブラウザの保存許可とHTTPS接続を確認してください。','error','info');}
-$('#game-dialog').addEventListener('click',async e=>{const action=e.target.closest('button')?.dataset.dialogAction;if(action==='corrupt-import')$('#import-file').click();if(action==='corrupt-reset'){await saves.clear();resetting=false;closeDialog();setGame(freshState());renderShop();updateUI();}});
-renderShop();applySettings();updateUI();previous=performance.now();requestAnimationFrame(loop);
+$('#game-dialog').addEventListener('click',async e=>{const action=e.target.closest('button')?.dataset.dialogAction;if(action==='corrupt-import')$('#import-file').click();if(action==='corrupt-reset'){await saves.clear();resetting=false;closeDialog();setGame(newUniverse());renderShop();updateUI();await save();}});
+loading=false;
+if(document.hidden)clock.pause(Date.now());
+renderShop();applySettings();updateUI();await save();requestAnimationFrame(loop);

@@ -1,6 +1,7 @@
 import {H,Huge,geometricCost} from './number.mjs';
 import {CONFIG,SKILLS,UPGRADES,BUILDINGS} from './config.mjs';
 import {NUMBER_FIELDS,HUGE_STATS,ACHIEVEMENTS,freshState} from './engine.mjs';
+import {validTimestamp} from './clock.mjs';
 export const SAVE_KEYS={current:'cosmic-rift.save.v1',previous:'cosmic-rift.backup.v1'};
 export const SAVE_ERROR='セーブデータが破損しているか、変更されています。';
 const FORMAT='CosmicRiftSave';
@@ -20,16 +21,19 @@ const list=(v,n)=>Array.isArray(v)&&v.length===n&&v.every(x=>integer(x,0,CONFIG.
 const uniqueIds=(v,allowed)=>Array.isArray(v)&&v.length<=allowed.length&&new Set(v).size===v.length&&v.every(x=>allowed.includes(x));
 function huge(v) {if(!v||typeof v!=='object'||Object.keys(v).length!==2||!real(v.m,0,10)||v.m===10||!integer(v.e,-1e15,1e15)||((v.m===0&&v.e!==0)||(v.m>0&&v.m<1)))throw new Error(SAVE_ERROR);return H(v);}
 const above=(a,b)=>a.gt(b.mul(1+1e-10));
-export function validateState(raw,now=Date.now()) {
+export function validateState(raw,now=Date.now(),{allowClockRollback=false}={}) {
  try {
   if(!raw||typeof raw!=='object'||raw.version!==CONFIG.version)throw 0;
   const s=structuredClone(raw),fresh=freshState(now);
   if(Object.keys(s).some(k=>!Object.hasOwn(fresh,k))||Object.keys(fresh).some(k=>!Object.hasOwn(s,k)))throw 0;
   for(const k of NUMBER_FIELDS)s[k]=huge(s[k]);
-  for(const k of ['createdAt','savedAt','runStartedAt'])if(!integer(s[k],1577836800000,now+120000))throw 0;
+  for(const k of ['createdAt','savedAt','runStartedAt'])if(!validTimestamp(s[k])||(!allowClockRollback&&s[k]>now+120000))throw 0;
   if(s.createdAt>s.savedAt||s.runStartedAt<s.createdAt||s.runStartedAt>s.savedAt+120000)throw 0;
   for(const k of ['runTime','playTime'])if(!real(s[k],0,1e12))throw 0;
-  if(s.runTime>(now-s.runStartedAt)/1000+300||s.playTime>(now-s.createdAt)/1000+300)throw 0;
+  // An authenticated timestamp may be ahead of the device after a clock correction.
+  // Validate its internal chronology; production separately clamps negative elapsed time.
+  const referenceTime=allowClockRollback?Math.max(now,s.savedAt):now;
+  if(s.runTime>(referenceTime-s.runStartedAt)/1000+300||s.playTime>(referenceTime-s.createdAt)/1000+300)throw 0;
   if(!list(s.buildings,13)||!list(s.redBuildings,13)||!list(s.endless,13)||s.endless.some(n=>n>1e9))throw 0;
   if(!uniqueIds(s.upgrades,UPGRADES.map(u=>u.id))||!uniqueIds(s.skills,SKILLS.map(k=>k.id))||!uniqueIds(s.achievements,ACHIEVEMENTS.map(a=>a.id)))throw 0;
   for(const k of ['infinityEarned','infinitySpent','prestiges'])if(!integer(s[k]))throw 0;
@@ -63,6 +67,7 @@ export function validateState(raw,now=Date.now()) {
 export const MIGRATIONS={};
 function migrate(raw){while(raw.version<CONFIG.version){const migrate=MIGRATIONS[raw.version];if(!migrate)throw new Error(SAVE_ERROR);raw=migrate(raw);}return raw;}
 export async function encryptState(state,now=Date.now()) {
+ if(!validTimestamp(now))throw new Error(SAVE_ERROR);
  const snapshot=JSON.parse(JSON.stringify(state));snapshot.savedAt=now;
  const validated=validateState(snapshot,now),iv=crypto.getRandomValues(new Uint8Array(12));
  const payload=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:encoder.encode(`${FORMAT}:1`)},await getKey(),encoder.encode(JSON.stringify(validated)));
@@ -74,30 +79,47 @@ export async function decryptSave(envelope,now=Date.now()) {
   if(!envelope||envelope.format!==FORMAT||envelope.version!==1||Object.keys(envelope).length!==4)throw 0;
   const iv=unbase64(envelope.iv),payload=unbase64(envelope.payload);if(iv.length!==12||payload.length<16||payload.length>1500000)throw 0;
   const data=await crypto.subtle.decrypt({name:'AES-GCM',iv,additionalData:encoder.encode(`${FORMAT}:1`)},await getKey(),payload);
-  return validateState(migrate(JSON.parse(decoder.decode(data))),now);
+  return validateState(migrate(JSON.parse(decoder.decode(data))),now,{allowClockRollback:true});
  }catch{throw new Error(SAVE_ERROR);}
 }
 export class SaveManager {
- constructor(storage=globalThis.localStorage){this.storage=storage;this.queue=Promise.resolve();this.generation=0;this.lastSaved=0;}
+ constructor(storage=globalThis.localStorage){this.storage=storage;this.queue=Promise.resolve();this.generation=0;this.lastSaved=0;this.pending=null;this.writing=false;}
  async load() {
   const current=this.storage.getItem(SAVE_KEYS.current),previous=this.storage.getItem(SAVE_KEYS.previous);
   if(!current&&!previous)return {state:null};
   for(const [text,backup] of [[current,false],[previous,true]])if(text){try{const state=await decryptSave(text);this.lastSaved=state.savedAt;return {state,backup};}catch{}}
   return {state:null,corrupt:true};
  }
- save(state) {
-  // Capture before async encryption, serialize writes, and invalidate pending writes on reset/import.
-  const snapshot=JSON.parse(JSON.stringify(state)),generation=this.generation;
-  const operation=this.queue.catch(()=>{}).then(async()=>{
-   const envelope=await encryptState(snapshot);await decryptSave(envelope);
-   if(generation!==this.generation)return false;
-   const old=this.storage.getItem(SAVE_KEYS.current);
-   if(old){try{await decryptSave(old);if(generation!==this.generation)return false;this.storage.setItem(SAVE_KEYS.previous,old);}catch{/* Preserve the last valid backup. */}}
-   if(generation!==this.generation)return false;
-   this.storage.setItem(SAVE_KEYS.current,JSON.stringify(envelope));this.lastSaved=Date.now();return true;
-  });this.queue=operation;return operation;
+ save(state,capturedAt=Date.now()) {
+  // Freeze the state AND its matching production timestamp before any async work.
+  if(!validTimestamp(capturedAt))return Promise.reject(new Error(SAVE_ERROR));
+  const snapshot=JSON.parse(JSON.stringify(state));
+  capturedAt=Math.max(capturedAt,snapshot.savedAt,snapshot.createdAt,snapshot.runStartedAt);
+  if(this.pending&&this.pending.generation===this.generation){this.pending.snapshot=snapshot;this.pending.capturedAt=capturedAt;return this.pending.promise;}
+  if(this.pending)this.pending.resolve(false);
+  const job={snapshot,capturedAt,generation:this.generation};
+  job.promise=new Promise((resolve,reject)=>{job.resolve=resolve;job.reject=reject;});
+  this.pending=job;
+  if(!this.writing){
+   this.writing=true;
+   // At most one active encryption and one latest pending snapshot, even on rapid lifecycle events.
+   this.queue=Promise.resolve().then(async()=>{
+    try{while(this.pending){const next=this.pending;this.pending=null;try{next.resolve(await this.writeSnapshot(next));}catch(error){next.reject(error);}}}
+    finally{this.writing=false;}
+   });
+  }
+  return job.promise;
  }
- async import(text) {const state=await decryptSave(text);this.generation++;await this.queue.catch(()=>{});await this.save(state);return state;}
+ async writeSnapshot({snapshot,capturedAt,generation}) {
+  if(generation!==this.generation)return false;
+  const envelope=await encryptState(snapshot,capturedAt);await decryptSave(envelope);
+  if(generation!==this.generation)return false;
+  const old=this.storage.getItem(SAVE_KEYS.current);
+  if(old){try{await decryptSave(old);if(generation!==this.generation)return false;this.storage.setItem(SAVE_KEYS.previous,old);}catch{/* Preserve the last valid backup. */}}
+  if(generation!==this.generation)return false;
+  this.storage.setItem(SAVE_KEYS.current,JSON.stringify(envelope));this.lastSaved=capturedAt;return true;
+ }
+ async import(text) {const state=await decryptSave(text);this.generation++;await this.queue.catch(()=>{});await this.save(state,state.savedAt);return state;}
  async backup() {const text=this.storage.getItem(SAVE_KEYS.previous);if(!text)throw new Error('まだバックアップがありません。');return decryptSave(text);}
  async clear() {this.generation++;await this.queue.catch(()=>{});this.storage.removeItem(SAVE_KEYS.current);this.storage.removeItem(SAVE_KEYS.previous);}
 }

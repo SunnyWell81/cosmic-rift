@@ -65,7 +65,7 @@ export class Game {
  get infinity() {return this.state.infinityEarned-this.state.infinitySpent;}
  get infinityGoal() {return H(CONFIG.infinity.first).mul(H(CONFIG.infinity.growth).pow(this.state.infinityEarned));}
  get infinityProgress() {return Math.max(0,Math.min(1,this.state.lifetimeDM.div(this.infinityGoal).toNumber()));}
- get offlineEfficiency() {return Math.min(1,CONFIG.offline.efficiency+this.skillSum('offline'));}
+ get offlineEfficiency() {return CONFIG.offline.efficiency+this.skillSum('offline');}
  get offlineHours() {return CONFIG.offline.hours+this.skillSum('offlineHours');}
  riftInterval() {return (CONFIG.rift.minInterval+this.random()*(CONFIG.rift.maxInterval-CONFIG.rift.minInterval))*this.skillFactor('riftFrequency');}
  awardDM(amount,source='building') {const s=this.state;amount=H(amount);s.dm=s.dm.add(amount);s.runDM=s.runDM.add(amount);s.lifetimeDM=s.lifetimeDM.add(amount);const key={click:'clickDM',building:'buildingDM',rift:'riftDM',offline:'offlineDM'}[source];if(key)s.stats[key]=s.stats[key].add(amount);}
@@ -135,10 +135,10 @@ export class Game {
   this.nextRift-=seconds;if(this.nextRift<=0){if(!this.rift)this.spawnRift();this.nextRift=this.riftInterval();}
   this.refresh();this.checkProgress();
  }
- applyOffline(seconds) {
-  if(!Number.isFinite(seconds)||seconds<CONFIG.offline.minimumSeconds)return null;
-  this.state.effects=[];this.refresh();
-  const credited=Math.min(seconds,this.offlineHours*3600),dm=this.baseDps.mul(credited*this.offlineEfficiency),rm=this.rmps.mul(credited*this.offlineEfficiency);
+ applyOffline(seconds,remainingCap=this.offlineHours*3600) {
+  if(!Number.isFinite(seconds)||seconds<=0||!Number.isFinite(remainingCap)||remainingCap<0)return null;
+  this.state.effects=[];this.combo=0;this.lastClick=-Infinity;this.refresh();
+  const credited=Math.min(seconds,this.offlineHours*3600,remainingCap),dm=this.baseDps.mul(credited*this.offlineEfficiency),rm=this.rmps.mul(credited*this.offlineEfficiency);
   this.awardDM(dm,'offline');this.awardRM(rm,'offline');this.state.stats.offlineSeconds+=credited;this.state.runTime+=seconds;this.state.playTime+=credited;this.rift=null;this.nextRift=this.riftInterval();this.refresh();this.checkProgress();return {seconds,credited,dm,rm,efficiency:this.offlineEfficiency};
  }
  hydrateEffects() {this.refresh();}

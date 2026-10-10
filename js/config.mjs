@@ -4,7 +4,8 @@ export const CONFIG={
   baseClick:1, comboWindow:1.5, comboMax:0.15, comboStep:0.01,
   prestige:{threshold:1e6,base:10,power:0.4,minRunSeconds:180,permanentFacilityPower:15},
   infinity:{first:1e5,growth:6},
-  offline:{hours:8,efficiency:0.5,minimumSeconds:60},
+  // minimumSeconds controls the return dialog only; every positive absence produces Matter.
+  offline:{hours:8,efficiency:1,minimumSeconds:60,backgroundThresholdSeconds:30},
   rift:{minInterval:90,maxInterval:180,visibleSeconds:13,effects:[
     {id:'surge',name:'Matter Surge',label:'DM生産 ×7',weight:22,seconds:30,production:7},
     {id:'cache',name:'Cosmic Cache',label:'180秒分のDark Matter',weight:43,cacheSeconds:180},
