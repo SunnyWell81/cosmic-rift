@@ -2,7 +2,7 @@
 export const CONFIG={
   version:1, productionScale:0.55, dmGrowth:1.15, rmGrowth:1.20, maxBuildingCount:9e12,
   baseClick:1, comboWindow:1.5, comboMax:0.15, comboStep:0.01,
-  prestige:{threshold:1e6,base:10,power:0.4,minRunSeconds:180,permanentFacilityPower:15},
+  prestige:{threshold:1e6,base:10,power:0.4,minRunSeconds:180,permanentFacilityPower:15,bonusPerRoot:0.1,maxMultiplier:3},
   infinity:{first:1e5,growth:6},
   // minimumSeconds controls the return dialog only; every positive absence produces Matter.
   offline:{hours:8,efficiency:1,minimumSeconds:60,backgroundThresholdSeconds:30},
@@ -30,6 +30,9 @@ export const CLICK_UPGRADES=[
   {id:'click5',name:'Singularity Touch',description:'恒常DM/secの4%をクリックに追加',cost:700000,unlock:400000,dps:.04,requires:'click4'},
   {id:'click6',name:'Rift Attunement',description:'Rift効果中のクリック ×3',cost:15000000,unlock:10000000,rift:3,requires:'click5'},
   {id:'click7',name:'Cosmic Feedback',description:'恒常DM/secの5%をクリックに追加',cost:500000000,unlock:100000000,dps:.05,requires:'click6'},
+  {id:'combo1',name:'Orbital Rhythm',description:'コンボ上限 +15ポイント・1クリックごとの上昇量 +0.5ポイント',cost:2500,unlock:1000,requires:'click2',comboMax:.15,comboStep:.005},
+  {id:'combo2',name:'Resonant Pulse',description:'コンボ上限 +15ポイント・1クリックごとの上昇量 +0.5ポイント',cost:100000,unlock:50000,requires:'combo1',comboMax:.15,comboStep:.005},
+  {id:'combo3',name:'Singularity Cadence',description:'コンボ上限 +15ポイント・1クリックごとの上昇量 +1ポイント',cost:5000000,unlock:2000000,requires:'combo2',comboMax:.15,comboStep:.01},
 ];
 const roman=['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII','XIII'];
 export const SKILLS=[
@@ -51,8 +54,12 @@ export const SKILLS=[
   {id:'red2',name:'Crimson Convergence',category:'永続',description:'永続施設のDM・RM生産 +50%',cost:4,earned:12,requires:'red1',effect:'red',value:1.5},
   {id:'flow3',name:'Universal Constant',category:'探索',description:'全施設のDM生産 +50%',cost:4,earned:12,requires:'flow2',effect:'production',value:1.5},
   {id:'touch3',name:'Infinite Touch',category:'探索',description:'恒常DM/secの2%をクリックに追加',cost:3,earned:9,requires:'touch2',effect:'clickDps',value:.02},
+  {id:'rhythm1',name:'Enduring Rhythm',category:'探索',description:'コンボ上限 +10ポイント・1クリックごとの上昇量 +0.5ポイント（永続）',cost:1,earned:3,requires:'touch1',comboMax:.1,comboStep:.005},
+  {id:'rhythm2',name:'Eternal Cadence',category:'探索',description:'コンボ上限 +15ポイント・1クリックごとの上昇量 +0.5ポイント（永続）',cost:3,earned:9,requires:'rhythm1',comboMax:.15,comboStep:.005},
   ...BUILDINGS.slice(0,9).map((b,i)=>({id:`special${i}`,name:`${b.name.split(' ')[0]} Mastery`,category:'施設',description:`${b.name}のDM・RM生産 +50%`,cost:2+Math.floor(i/3),earned:4+i*3,effect:`building${i}`,value:1.5})),
-  ...BUILDINGS.map((b,i)=>({id:`resonance${i}`,name:`Red Resonance ${roman[i]}`,category:'共鳴',description:`永続${b.name}が恒久DM能力の50%をRM/secとして生成`,cost:4+i,earned:10+i*5,requires:i?`resonance${i-1}`:'red1',effect:`resonance${i}`,value:1}))
+  ...BUILDINGS.map((b,i)=>({id:`resonance${i}`,name:`Red Resonance ${roman[i]}`,category:'共鳴',description:`永続${b.name}が転生倍率を除く恒久DM能力の50%をRM/secとして生成`,cost:4+i,earned:10+i*5,requires:i?`resonance${i-1}`:'red1',effect:`resonance${i}`,value:1}))
 ];
 export const FACILITY_UPGRADES=BUILDINGS.flatMap((b,i)=>CONFIG.upgradeMilestones.map((amount,t)=>({id:`b${i}u${t}`,building:i,tier:t,amount,cost:b.cost*CONFIG.upgradeCostFactors[t],name:[`${b.name.split(' ')[0]} Calibration`,'Quantum Synchrony','Gravity Cascade','Stellar Network','Infinite Architecture'][t],description:t===2?'生産 ×2 ＋ 上位施設1個につき +1%':t===4?'生産 ×2 ＋ 全施設25個につき +1%':'施設生産 ×2'})));
 export const UPGRADES=[...CLICK_UPGRADES,...FACILITY_UPGRADES];
+// Historical combo records survive the loss of run upgrades at Prestige.
+export const MAX_COMBO_PERCENT=Math.round((CONFIG.comboMax+[...CLICK_UPGRADES,...SKILLS].reduce((sum,item)=>sum+(item.comboMax||0),0))*100);

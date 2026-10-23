@@ -1,5 +1,5 @@
 import {H,Huge,geometricCost} from './number.mjs';
-import {CONFIG,SKILLS,UPGRADES,BUILDINGS} from './config.mjs';
+import {CONFIG,SKILLS,UPGRADES,BUILDINGS,MAX_COMBO_PERCENT} from './config.mjs';
 import {NUMBER_FIELDS,HUGE_STATS,ACHIEVEMENTS,freshState} from './engine.mjs';
 import {validTimestamp} from './clock.mjs';
 export const SAVE_KEYS={current:'cosmic-rift.save.v1',previous:'cosmic-rift.backup.v1'};
@@ -51,7 +51,7 @@ export function validateState(raw,now=Date.now(),{allowClockRollback=false}={}) 
   if(!s.stats||Object.keys(s.stats).some(k=>!Object.hasOwn(fresh.stats,k))||Object.keys(fresh.stats).some(k=>!Object.hasOwn(s.stats,k)))throw 0;
   for(const k of HUGE_STATS)s.stats[k]=huge(s.stats[k]);
   for(const k of ['clicks','buildingsBought','redBought','upgradesBought','riftsAppeared','riftsClicked','maxCombo'])if(!integer(s.stats[k]))throw 0;
-  if(!real(s.stats.offlineSeconds)||s.stats.maxCombo>15||s.stats.riftsClicked>s.stats.riftsAppeared)throw 0;
+  if(!real(s.stats.offlineSeconds)||s.stats.maxCombo>MAX_COMBO_PERCENT||s.stats.riftsClicked>s.stats.riftsAppeared)throw 0;
   if(!list(s.stats.highestBuildings,13)||!list(s.stats.highestRedBuildings,13))throw 0;
   if(s.buildings.some((v,i)=>v>s.stats.highestBuildings[i])||s.redBuildings.some((v,i)=>v>s.stats.highestRedBuildings[i]))throw 0;
   if(s.stats.redBought>s.stats.buildingsBought||s.stats.buildingsBought<s.buildings.reduce((a,b)=>a+b,0)+s.redBuildings.reduce((a,b)=>a+b,0)||s.stats.redBought<s.redBuildings.reduce((a,b)=>a+b,0))throw 0;

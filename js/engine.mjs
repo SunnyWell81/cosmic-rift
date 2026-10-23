@@ -21,7 +21,7 @@ export const ACHIEVEMENTS=[
  ...[60,3600,28800].map((v,i)=>a(`offline${i}`,`While You Were Away ${i+1}`,`オフライン生産 ${v/60}分`,'時間',s=>s.stats.offlineSeconds>=v)),
  a('resonant','Red Awakening','最初のRed Resonanceを取得','永続',s=>s.skills.includes('resonance0')),
  a('secret77','Lucky Singularity','77回ブラックホールを観測','隠し',s=>s.stats.clicks>=77,true),
- a('secretcombo','A Steady Hand','連続クリックボーナスを最大にする','隠し',s=>s.stats.maxCombo>=15,true),
+ a('secretcombo','A Steady Hand','連続クリックボーナス +15%を達成','隠し',s=>s.stats.maxCombo>=15,true),
  a('secretred','Second Heartbeat','永続施設からRed Matterを生産','隠し',s=>s.stats.buildingRM.gt(0),true),
  a('secretall','Thirteen Horizons','全13種類の施設を所有','隠し',s=>s.stats.highestBuildings.every(n=>n>0),true)
 ];
@@ -33,7 +33,11 @@ export class Game {
  skillSum(effect) {return SKILLS.filter(k=>k.effect===effect&&this.state.skills.includes(k.id)).reduce((n,k)=>n+k.value,0);}
  refresh() {
   const s=this.state,total=s.buildings.reduce((a,b)=>a+b,0)+s.redBuildings.reduce((a,b)=>a+b,0);
-  const global=this.skillFactor('production'); let dm=H(0),rm=H(0);
+  const global=this.skillFactor('production'),rebirth=this.prestigeMultiplier(); let dm=H(0),rm=H(0);
+  const comboBonuses=[...CLICK_UPGRADES.filter(u=>s.upgrades.includes(u.id)),...SKILLS.filter(k=>s.skills.includes(k.id))];
+  this.comboMax=CONFIG.comboMax+comboBonuses.reduce((sum,item)=>sum+(item.comboMax||0),0);
+  this.comboStep=CONFIG.comboStep+comboBonuses.reduce((sum,item)=>sum+(item.comboStep||0),0);
+  this.combo=Math.min(this.combo,this.comboMax);
   this.facilityRates=BUILDINGS.map((b,i)=>{
    let permanent=H(b.rate).mul(CONFIG.productionScale).mul(global).mul(this.skillFactor(`building${i}`));
    let normal=permanent;
@@ -43,18 +47,20 @@ export class Game {
     if(t===4) normal=normal.mul(1+total*.0004);
    }
    normal=normal.mul(H(CONFIG.repeatUpgrade.power).pow(s.endless[i]));
+   normal=normal.mul(rebirth);
    const dark=normal.mul(s.buildings[i]);
    // RM capacity uses only permanent factors: never run upgrades, combo or Rift buffs.
-   const redUnit=permanent.mul(CONFIG.prestige.permanentFacilityPower).mul(this.skillFactor('red'));
+   const redCapacity=permanent.mul(CONFIG.prestige.permanentFacilityPower).mul(this.skillFactor('red'));
+   const redUnit=redCapacity.mul(rebirth);
    const red=redUnit.mul(s.redBuildings[i]);
-   const redRate=s.skills.includes(`resonance${i}`)?red.mul(.5):H(0);
+   const redRate=s.skills.includes(`resonance${i}`)?redCapacity.mul(s.redBuildings[i]).mul(.5):H(0);
    dm=dm.add(dark).add(red);rm=rm.add(redRate);
    return {unit:normal,dark,red,redUnit,rm:redRate,total:dark.add(red)};
   });
   this.baseDps=dm;this.rmps=rm;
   this.productionMultiplier=s.effects.reduce((n,e)=>n*(CONFIG.rift.effects.find(x=>x.id===e.id)?.production||1),1);
   this.dps=dm.mul(this.productionMultiplier);
-  let click=H(CONFIG.baseClick).mul(this.skillFactor('click')),fraction=this.skillSum('clickDps');
+  let click=H(CONFIG.baseClick).mul(this.skillFactor('click')).mul(rebirth),fraction=this.skillSum('clickDps');
   for(const u of CLICK_UPGRADES) if(s.upgrades.includes(u.id)) {if(u.mult) click=click.mul(u.mult);fraction+=u.dps||0;}
   click=click.add(dm.mul(fraction));
   for(const u of CLICK_UPGRADES) if(u.rift&&s.upgrades.includes(u.id)&&s.effects.length) click=click.mul(u.rift);
@@ -79,8 +85,8 @@ export class Game {
   for(const achievement of ACHIEVEMENTS) if(!s.achievements.includes(achievement.id)&&achievement.test(s)) {s.achievements.push(achievement.id);this.emit('achievement',{achievement});}
  }
  click() {
-  const s=this.state;this.combo=this.clock-this.lastClick<CONFIG.comboWindow?Math.min(CONFIG.comboMax,this.combo+CONFIG.comboStep):0;
-  this.lastClick=this.clock;const amount=this.clickPower.mul(1+this.combo);this.awardDM(amount,'click');s.stats.clicks++;s.stats.maxCombo=Math.max(s.stats.maxCombo,Math.round(this.combo/CONFIG.comboStep));this.checkProgress();this.emit('click',{amount});return amount;
+  const s=this.state;this.combo=this.clock-this.lastClick<CONFIG.comboWindow?Math.min(this.comboMax,this.combo+this.comboStep):0;
+  this.lastClick=this.clock;const amount=this.clickPower.mul(1+this.combo);this.awardDM(amount,'click');s.stats.clicks++;s.stats.maxCombo=Math.max(s.stats.maxCombo,Math.floor(this.combo*100+1e-8));this.checkProgress();this.emit('click',{amount});return amount;
  }
  cost(i,currency='dm',n=1) {const b=BUILDINGS[i],red=currency==='rm';return geometricCost(red?b.redCost:b.cost,red?CONFIG.rmGrowth:CONFIG.dmGrowth,(red?this.state.redBuildings:this.state.buildings)[i],n);}
  affordable(i,currency='dm') {const b=BUILDINGS[i],red=currency==='rm';return maxAffordable(this.state[currency],red?b.redCost:b.cost,red?CONFIG.rmGrowth:CONFIG.dmGrowth,(red?this.state.redBuildings:this.state.buildings)[i],CONFIG.maxBuildingCount);}
@@ -104,7 +110,20 @@ export class Game {
  buyRepeat(i) {const s=this.state;if(!BUILDINGS[i]||s.buildings[i]+s.redBuildings[i]<CONFIG.repeatUpgrade.requirement||!s.dm.gte(this.repeatCost(i))||s.endless[i]>=1e9)return false;s.dm=s.dm.sub(this.repeatCost(i));s.endless[i]++;s.stats.upgradesBought++;this.refresh();return true;}
  skillAvailable(k) {return !this.state.skills.includes(k.id)&&this.state.infinityEarned>=k.earned&&(!k.requires||this.state.skills.includes(k.requires));}
  buySkill(id) {const k=SKILLS.find(k=>k.id===id);if(!k||!this.skillAvailable(k)||this.infinity<k.cost)return false;this.state.infinitySpent+=k.cost;this.state.skills.push(id);this.refresh();this.checkProgress();this.emit('skill',{skill:k});return true;}
- prestigeReward() {const s=this.state;if(!s.runDM.gte(CONFIG.prestige.threshold))return H(0);return s.runDM.div(CONFIG.prestige.threshold).pow(CONFIG.prestige.power).mul(CONFIG.prestige.base).mul(this.skillFactor('prestige')).floor();}
+ // Square-root growth rewards rebirth without compounding every run; RM capacity is excluded.
+ prestigeMultiplier(count=this.state.prestiges) {return Math.min(CONFIG.prestige.maxMultiplier,1+CONFIG.prestige.bonusPerRoot*Math.sqrt(count));}
+ prestigeRewardAt(produced) {produced=H(produced);if(produced.lt(CONFIG.prestige.threshold))return H(0);return produced.div(CONFIG.prestige.threshold).pow(CONFIG.prestige.power).mul(CONFIG.prestige.base).mul(this.skillFactor('prestige')).floor();}
+ prestigeReward() {return this.prestigeRewardAt(this.state.runDM);}
+ nextPrestigeReward() {
+  const produced=this.state.runDM,current=this.prestigeReward();
+  let reward=current.add(1);
+  // Huge numbers cannot represent a single unit at large exponents. Use a representable increase.
+  if(reward.eq(current))reward=current.mul(1+1e-12).floor();
+  let target=Huge.max(H(CONFIG.prestige.threshold),reward.div(CONFIG.prestige.base).div(this.skillFactor('prestige')).pow(1/CONFIG.prestige.power).mul(CONFIG.prestige.threshold));
+  if(this.prestigeRewardAt(target).lt(reward))target=target.mul(1+1e-12);
+  if(target.lte(produced))target=produced.mul(1+1e-12);
+  return {reward:this.prestigeRewardAt(target),target,remaining:target.sub(produced)};
+ }
  canPrestige() {return this.state.runTime>=CONFIG.prestige.minRunSeconds&&this.prestigeReward().gte(1);}
  prestige(now=Date.now()) {
   if(!this.canPrestige())return false;
@@ -123,7 +142,7 @@ export class Game {
  tick(seconds) {
   if(!Number.isFinite(seconds)||seconds<=0)return;
   const s=this.state;this.clock+=seconds;s.runTime+=seconds;s.playTime+=seconds;
-  if(this.clock-this.lastClick>CONFIG.comboWindow)this.combo=0;
+  if(this.clock-this.lastClick>=CONFIG.comboWindow)this.combo=0;
   // At most four effect boundaries, independent of elapsed time.
   const boundaries=[...new Set(s.effects.map(e=>e.remaining).filter(t=>t>0&&t<seconds))].sort((a,b)=>a-b);boundaries.push(seconds);
   let previous=0;
