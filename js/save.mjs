@@ -30,6 +30,7 @@ export function validateState(raw,now=Date.now(),{allowClockRollback=false}={}) 
   for(const k of ['createdAt','savedAt','runStartedAt'])if(!validTimestamp(s[k])||(!allowClockRollback&&s[k]>now+120000))throw 0;
   if(s.createdAt>s.savedAt||s.runStartedAt<s.createdAt||s.runStartedAt>s.savedAt+120000)throw 0;
   for(const k of ['runTime','playTime'])if(!real(s[k],0,1e12))throw 0;
+  if(!s.activity||Object.keys(s.activity).length!==3||!validTimestamp(s.activity.since)||s.activity.since<s.createdAt||!real(s.activity.runSeconds,0,1e12)||!real(s.activity.totalSeconds,0,1e12)||s.activity.runSeconds>s.activity.totalSeconds)throw 0;
   // An authenticated timestamp may be ahead of the device after a clock correction.
   // Validate its internal chronology; production separately clamps negative elapsed time.
   const referenceTime=allowClockRollback?Math.max(now,s.savedAt):now;
@@ -64,8 +65,16 @@ export function validateState(raw,now=Date.now(),{allowClockRollback=false}={}) 
  }catch{throw new Error(SAVE_ERROR);}
 }
 // Future versions add explicit, sequential migrations here, before schema validation.
-export const MIGRATIONS={};
-function migrate(raw){while(raw.version<CONFIG.version){const migrate=MIGRATIONS[raw.version];if(!migrate)throw new Error(SAVE_ERROR);raw=migrate(raw);}return raw;}
+export const MIGRATIONS={
+ // Old clocks include offline time. Keep them for existing prestige rules only;
+ // historical visible time cannot be recovered and starts at zero on migration.
+ 1:(raw,now)=>({...raw,version:2,activity:{since:Math.max(now,raw.savedAt),runSeconds:0,totalSeconds:0}})
+};
+function migrate(raw,now){
+ if(!raw||!integer(raw.version,1,CONFIG.version))throw new Error(SAVE_ERROR);
+ while(raw.version<CONFIG.version){const next=MIGRATIONS[raw.version];if(!next)throw new Error(SAVE_ERROR);raw=next(raw,now);}
+ return raw;
+}
 export async function encryptState(state,now=Date.now()) {
  if(!validTimestamp(now))throw new Error(SAVE_ERROR);
  const snapshot=JSON.parse(JSON.stringify(state));snapshot.savedAt=now;
@@ -79,18 +88,25 @@ export async function decryptSave(envelope,now=Date.now()) {
   if(!envelope||envelope.format!==FORMAT||envelope.version!==1||Object.keys(envelope).length!==4)throw 0;
   const iv=unbase64(envelope.iv),payload=unbase64(envelope.payload);if(iv.length!==12||payload.length<16||payload.length>1500000)throw 0;
   const data=await crypto.subtle.decrypt({name:'AES-GCM',iv,additionalData:encoder.encode(`${FORMAT}:1`)},await getKey(),payload);
-  return validateState(migrate(JSON.parse(decoder.decode(data))),now,{allowClockRollback:true});
+  return validateState(migrate(JSON.parse(decoder.decode(data)),now),now,{allowClockRollback:true});
  }catch{throw new Error(SAVE_ERROR);}
 }
 export class SaveManager {
- constructor(storage=globalThis.localStorage){this.storage=storage;this.queue=Promise.resolve();this.generation=0;this.lastSaved=0;this.pending=null;this.writing=false;}
+ constructor(storage){
+  // Resolve browser storage inside load/save, so denied access reaches recovery UI.
+  this.storage=storage??{getItem:key=>globalThis.localStorage.getItem(key),setItem:(key,value)=>globalThis.localStorage.setItem(key,value),removeItem:key=>globalThis.localStorage.removeItem(key)};
+  this.queue=Promise.resolve();this.generation=0;this.lastSaved=0;this.pending=null;this.writing=false;this.blocked=false;
+ }
  async load() {
+  // Read/decrypt failures must never turn into a fresh automatic save.
+  this.blocked=true;
   const current=this.storage.getItem(SAVE_KEYS.current),previous=this.storage.getItem(SAVE_KEYS.previous);
-  if(!current&&!previous)return {state:null};
-  for(const [text,backup] of [[current,false],[previous,true]])if(text){try{const state=await decryptSave(text);this.lastSaved=state.savedAt;return {state,backup};}catch{}}
+  if(!current&&!previous){this.blocked=false;return {state:null};}
+  for(const [text,backup] of [[current,false],[previous,true]])if(text){try{const state=await decryptSave(text);this.lastSaved=state.savedAt;this.blocked=false;return {state,backup};}catch{}}
   return {state:null,corrupt:true};
  }
  save(state,capturedAt=Date.now()) {
+  if(this.blocked)return Promise.reject(new Error('元のセーブを保護するため保存を停止しています。Importまたは復旧が必要です。'));
   // Freeze the state AND its matching production timestamp before any async work.
   if(!validTimestamp(capturedAt))return Promise.reject(new Error(SAVE_ERROR));
   const snapshot=JSON.parse(JSON.stringify(state));
@@ -111,15 +127,20 @@ export class SaveManager {
   return job.promise;
  }
  async writeSnapshot({snapshot,capturedAt,generation}) {
-  if(generation!==this.generation)return false;
+  if(generation!==this.generation||this.blocked)return false;
   const envelope=await encryptState(snapshot,capturedAt);await decryptSave(envelope);
   if(generation!==this.generation)return false;
-  const old=this.storage.getItem(SAVE_KEYS.current);
-  if(old){try{await decryptSave(old);if(generation!==this.generation)return false;this.storage.setItem(SAVE_KEYS.previous,old);}catch{/* Preserve the last valid backup. */}}
-  if(generation!==this.generation)return false;
+  const old=this.storage.getItem(SAVE_KEYS.current);let validOld=false;
+  if(old){try{await decryptSave(old);validOld=true;}catch{/* Preserve the last valid backup. */}}
+  if(generation!==this.generation||this.blocked)return false;
+  // A backup storage failure must abort, rather than overwrite the only good copy.
+  if(validOld)this.storage.setItem(SAVE_KEYS.previous,old);
   this.storage.setItem(SAVE_KEYS.current,JSON.stringify(envelope));this.lastSaved=capturedAt;return true;
  }
- async import(text) {const state=await decryptSave(text);this.generation++;await this.queue.catch(()=>{});await this.save(state,state.savedAt);return state;}
+ async import(text) {
+  const state=await decryptSave(text),wasBlocked=this.blocked;this.generation++;await this.queue.catch(()=>{});this.blocked=false;
+  try{if(!await this.save(state,state.savedAt))throw new Error('Importが別の保存処理で中断されました。');return state;}catch(error){this.blocked=wasBlocked;throw error;}
+ }
  async backup() {const text=this.storage.getItem(SAVE_KEYS.previous);if(!text)throw new Error('まだバックアップがありません。');return decryptSave(text);}
- async clear() {this.generation++;await this.queue.catch(()=>{});this.storage.removeItem(SAVE_KEYS.current);this.storage.removeItem(SAVE_KEYS.previous);}
+ async clear() {this.generation++;await this.queue.catch(()=>{});this.storage.removeItem(SAVE_KEYS.current);this.storage.removeItem(SAVE_KEYS.previous);this.blocked=false;}
 }

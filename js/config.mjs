@@ -1,6 +1,6 @@
 /** All tunable game balance lives here. No backend or runtime dependency. */
 export const CONFIG={
-  version:1, productionScale:0.55, dmGrowth:1.15, rmGrowth:1.20, maxBuildingCount:9e12,
+  version:2, productionScale:0.55, dmGrowth:1.15, rmGrowth:1.20, maxBuildingCount:9e12,
   baseClick:1, comboWindow:1.5, comboMax:0.15, comboStep:0.01,
   prestige:{threshold:1e6,base:10,power:0.4,minRunSeconds:180,permanentFacilityPower:15,bonusPerRoot:0.1,maxMultiplier:3},
   infinity:{first:1e5,growth:6},

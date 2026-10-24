@@ -3,7 +3,7 @@ import {CONFIG,BUILDINGS,SKILLS,UPGRADES,CLICK_UPGRADES} from './config.mjs';
 export const NUMBER_FIELDS=['dm','runDM','lifetimeDM','rm','lifetimeRM'];
 export const HUGE_STATS=['highestDps','clickDM','buildingDM','riftDM','prestigeRM','buildingRM','offlineDM','offlineRM'];
 export function freshState(now=Date.now()) {
-  return {version:CONFIG.version,createdAt:now,savedAt:now,runStartedAt:now,dm:H(0),runDM:H(0),lifetimeDM:H(0),rm:H(0),lifetimeRM:H(0),buildings:Array(13).fill(0),redBuildings:Array(13).fill(0),endless:Array(13).fill(0),upgrades:[],skills:[],achievements:[],infinityEarned:0,infinitySpent:0,prestiges:0,runTime:0,playTime:0,stats:{...Object.fromEntries(HUGE_STATS.map(k=>[k,H(0)])),clicks:0,buildingsBought:0,redBought:0,upgradesBought:0,riftsAppeared:0,riftsClicked:0,offlineSeconds:0,highestBuildings:Array(13).fill(0),highestRedBuildings:Array(13).fill(0),maxCombo:0},settings:{notation:'standard',motion:true,particles:true},effects:[]};
+  return {version:CONFIG.version,createdAt:now,savedAt:now,runStartedAt:now,dm:H(0),runDM:H(0),lifetimeDM:H(0),rm:H(0),lifetimeRM:H(0),buildings:Array(13).fill(0),redBuildings:Array(13).fill(0),endless:Array(13).fill(0),upgrades:[],skills:[],achievements:[],infinityEarned:0,infinitySpent:0,prestiges:0,runTime:0,playTime:0,activity:{since:now,runSeconds:0,totalSeconds:0},stats:{...Object.fromEntries(HUGE_STATS.map(k=>[k,H(0)])),clicks:0,buildingsBought:0,redBought:0,upgradesBought:0,riftsAppeared:0,riftsClicked:0,offlineSeconds:0,highestBuildings:Array(13).fill(0),highestRedBuildings:Array(13).fill(0),maxCombo:0},settings:{notation:'standard',motion:true,particles:true},effects:[]};
 }
 const a=(id,name,description,category,test,hidden=false)=>({id,name,description,category,test,hidden});
 export const ACHIEVEMENTS=[
@@ -127,7 +127,7 @@ export class Game {
  canPrestige() {return this.state.runTime>=CONFIG.prestige.minRunSeconds&&this.prestigeReward().gte(1);}
  prestige(now=Date.now()) {
   if(!this.canPrestige())return false;
-  const reward=this.prestigeReward(),s=this.state;this.awardRM(reward,'prestige');s.prestiges++;s.dm=H(0);s.runDM=H(0);s.buildings=Array(13).fill(0);s.endless=Array(13).fill(0);s.upgrades=[];s.effects=[];s.runTime=0;s.runStartedAt=now;this.combo=0;this.rift=null;this.nextRift=this.riftInterval();this.refresh();this.checkProgress();this.emit('prestige',{reward});return reward;
+  const reward=this.prestigeReward(),s=this.state;this.awardRM(reward,'prestige');s.prestiges++;s.dm=H(0);s.runDM=H(0);s.buildings=Array(13).fill(0);s.endless=Array(13).fill(0);s.upgrades=[];s.effects=[];s.runTime=0;s.activity.runSeconds=0;s.runStartedAt=now;this.combo=0;this.rift=null;this.nextRift=this.riftInterval();this.refresh();this.checkProgress();this.emit('prestige',{reward});return reward;
  }
  spawnRift() {this.rift={remaining:CONFIG.rift.visibleSeconds*this.skillFactor('riftDuration'),x:.12+this.random()*.72,y:.18+this.random()*.58};this.state.stats.riftsAppeared++;this.emit('rift');}
  catchRift() {

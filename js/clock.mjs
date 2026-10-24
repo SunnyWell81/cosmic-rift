@@ -6,6 +6,25 @@ export const MIN_TIMESTAMP=1577836800000;
 export const MAX_TIMESTAMP=253402300799999;
 export const validTimestamp=time=>Number.isSafeInteger(time)&&time>=MIN_TIMESTAMP&&time<=MAX_TIMESTAMP;
 
+// Visible play time is independent of production, device time and offline rewards.
+// A long gap means the loop was suspended (e.g. device sleep); do not guess activity.
+export class VisiblePlayClock {
+ constructor(state,now=performance.now()) {this.state=state;this.updatedAt=now;this.running=false;}
+ advance(now=performance.now()) {
+  if(!Number.isFinite(now)||now<=this.updatedAt)return 0;
+  const seconds=(now-this.updatedAt)/1000;this.updatedAt=now;
+  if(!this.running||seconds>30)return 0;
+  this.state.activity.runSeconds+=seconds;this.state.activity.totalSeconds+=seconds;
+  return seconds;
+ }
+ pause(now=performance.now()) {this.advance(now);this.running=false;}
+ resume(now=performance.now()) {
+  if(this.running){this.advance(now);return;}
+  if(Number.isFinite(now))this.updatedAt=Math.max(this.updatedAt,now);
+  this.running=true;
+ }
+}
+
 export class ProductionClock {
  constructor(game,now=Date.now()) {
   if(!validTimestamp(now))throw new Error('保存日時が不正です。');
