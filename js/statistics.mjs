@@ -1,3 +1,4 @@
+import {rangeCount} from './research.mjs';
 import {ACHIEVEMENTS} from './engine.mjs';
 
 // Static layout, live values: updating numbers never replaces a focused summary
@@ -22,7 +23,7 @@ export const STAT_GROUPS=[
  ]},
  {id:'progress',title:'進行記録',description:'IM · Infinity Skillを取得するポイント',rows:[
   ['multiplier','現在の転生倍率'],['infinity','利用可能なInfinity Matter（IM）'],
-  ['infinityEarned','累計獲得IM'],['infinitySpent','使用済みIM'],['skills','取得済みInfinity Skill'],
+  ['infinityEarned','累計獲得IM'],['infinitySpent','使用済みIM'],['skills','取得済み固定Skill'],['infiniteSeries','取得済み上位Skill系列'],['infiniteLevels','上位Skillの合計レベル'],
   ['upgrades','現在の通常研究'],['achievements','解除済み実績']
  ]},
  {id:'details',title:'その他の詳細統計',description:'クリック・施設・Cosmic Rift',rows:[
@@ -47,8 +48,8 @@ export function statisticsValues(game,fmt,duration){
   dm:fmt(s.dm),runDM:fmt(s.runDM),dps:fmt(game.dps),clickDM:fmt(t.clickDM),buildingDM:fmt(t.buildingDM),riftDM:fmt(t.riftDM),offlineDM:fmt(t.offlineDM),
   rm:fmt(s.rm),lifetimeRM:fmt(s.lifetimeRM),rmps:fmt(game.rmps),prestigeRM:fmt(t.prestigeRM),buildingRM:fmt(t.buildingRM),offlineRM:fmt(t.offlineRM),
   multiplier:`×${game.prestigeMultiplier().toFixed(3)}`,infinity:count(game.infinity),infinityEarned:count(s.infinityEarned),infinitySpent:count(s.infinitySpent),
-  skills:count(s.skills.length),upgrades:count(s.upgrades.length),achievements:`${count(s.achievements.length)} / ${ACHIEVEMENTS.length}`,
-  clicks:count(t.clicks),maxCombo:`+${t.maxCombo}%`,comboMax:`+${percent(game.comboMax)}%`,comboStep:`+${percent(game.comboStep)} ポイント`,
+  skills:count(s.skills.length),infiniteSeries:count(Object.values(s.infiniteSkills).filter(n=>n>0).length),infiniteLevels:count(Object.values(s.infiniteSkills).reduce((n,v)=>n+v,0)),upgrades:count(s.upgrades.length+s.facilityResearch.reduce((n,r)=>n+rangeCount(r),0)),achievements:`${count(s.achievements.length)} / ${ACHIEVEMENTS.length}`,
+  clicks:count(t.clicks),maxCombo:`+${t.maxCombo}%`,comboMax:game.comboMax===null?'上限なし':`+${percent(game.comboMax)}%`,comboStep:`+${percent(game.comboStep)} ポイント`,
   buildings:count(sum(s.buildings)),redBuildings:count(sum(s.redBuildings)),buildingsBought:count(t.buildingsBought),redBought:count(t.redBought),upgradesBought:count(t.upgradesBought),
   riftsAppeared:count(t.riftsAppeared),riftsClicked:count(t.riftsClicked),offlineTime:duration(t.offlineSeconds)
  };

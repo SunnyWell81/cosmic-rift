@@ -28,6 +28,13 @@ const paths={
  cosmic:'M12 2 3 7v10l9 5 9-5V7l-9-5Z M3 7l18 10 M21 7 3 17 M12 2v20',
  reality:'M4 4h12v12H4V4Z M8 8h12v12H8V8Z M4 4l4 4 M16 4l4 4 M4 16l4 4',
  dimension:'m12 2 10 10-10 10L2 12 12 2Z M12 2v20 M2 12h20 M6 6l12 12 M18 6 6 18',
- eternity:'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M12 7c-5-5-9 5-4 7 4 2 5-6 8-4 4 2 1 7-3 4 M12 3v2 M12 19v2'
+ eternity:'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M12 7c-5-5-9 5-4 7 4 2 5-6 8-4 4 2 1 7-3 4 M12 3v2 M12 19v2',
+ prismatic:'M12 2 3 7v10l9 5 9-5V7l-9-5Z M3 7l9 5 9-5 M12 12v10 M12 2v10 M3 17l9-5 9 5',
+ probability:'M4 4h16v16H4V4Z M8 8h.01 M16 8h.01 M12 12h.01 M8 16h.01 M16 16h.01',
+ fractal:'M12 2 2 21h20L12 2Z M12 9 6 20h12L12 9Z M12 15l-3 5h6l-3-5Z',
+ mainframe:'M6 6h12v12H6V6Z M9 9h6v6H9V9Z M9 2v4 M15 2v4 M9 18v4 M15 18v4 M2 9h4 M2 15h4 M18 9h4 M18 15h4',
+ multiverse:'M9 3a6 6 0 1 0 0 12 6 6 0 0 0 0-12Z M15 9a6 6 0 1 0 0 12 6 6 0 0 0 0-12Z M9 9l6 6 M3 9h12 M9 3v12',
+ consciousness:'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M3 12h18 M12 3c-7 5-7 13 0 18 7-5 7-13 0-18Z M7 7l10 10 M17 7 7 17',
+ architect:'M12 2 3 8v8l9 6 9-6V8l-9-6Z M3 8l9 6 9-6 M12 14v8 M7 10l5-5 5 5 M7 17l5-3 5 3'
 };
 export function icon(name,size=20){return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[name]||paths.rift}"/></svg>`;}

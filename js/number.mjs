@@ -39,6 +39,9 @@ export const H = v => Huge.from(v);
 export function geometricCost(base, growth, owned, count=1) {
   if (!count) return H(0);
   const next=H(base).mul(H(growth).pow(owned));
+  // The one-item price is also MAX's affordability boundary. Returning it directly
+  // avoids cancellation in (growth - 1), which could disagree by a rounding bit.
+  if (count===1) return next;
   return next.mul(H(growth).pow(count).sub(1)).div(growth-1);
 }
 export function maxAffordable(wallet, base, growth, owned, limit=9e12) {
